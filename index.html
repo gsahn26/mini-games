@@ -2,227 +2,499 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>스네이크 게임</title>
+<title>슈퍼 점프 브로스</title>
 <style>
-  :root {
-    --bg: #0f1117;
-    --board-bg: #1a1d27;
-    --snake: #4ade80;
-    --snake-head: #22c55e;
-    --food: #f87171;
-    --text: #e5e7eb;
-    --accent: #60a5fa;
+  :root{
+    --bg:#0b0d13;
+    --panel:#161a24;
+    --text:#e5e7eb;
+    --accent:#facc15;
+    --warn:#fbbf24;
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden;}
+  #app{position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center;}
+  #game{
+    background:#5c94fc;
+    display:block;
+    max-width:100%;
+    max-height:100%;
+    border:3px solid #2d3140;
+    border-radius:6px;
+    image-rendering:pixelated;
   }
-  h1 {
-    margin: 0;
-    font-size: 28px;
-    letter-spacing: 1px;
+  #hud{
+    position:absolute; top:16px; left:16px;
+    background:rgba(22,26,36,0.85);
+    border:1px solid #2d3140;
+    border-radius:10px;
+    padding:12px 18px;
+    display:flex;
+    gap:22px;
+    pointer-events:none;
   }
-  #info {
-    display: flex;
-    gap: 24px;
-    font-size: 16px;
+  #hud .item{font-size:14px;display:flex;flex-direction:column;gap:2px;}
+  #hud .item span.label{color:#9ca3af;font-size:11px;}
+  #hud .item span.value{color:var(--accent);font-weight:bold;font-size:16px;}
+  #hint{
+    position:absolute; bottom:14px; left:50%; transform:translateX(-50%);
+    font-size:13px;color:#cbd5e1; text-align:center; pointer-events:none;
+    background:rgba(22,26,36,0.6); padding:6px 14px; border-radius:20px;
+    white-space:nowrap;
   }
-  #info span { color: var(--accent); font-weight: bold; }
-  #board {
-    background: var(--board-bg);
-    border: 3px solid #2d3140;
-    border-radius: 8px;
-    display: block;
+  #overlay{
+    position:absolute; inset:0;
+    display:none;
+    align-items:center; justify-content:center;
+    flex-direction:column; gap:14px;
+    background:rgba(10,12,18,0.78);
   }
-  #message {
-    min-height: 24px;
-    font-size: 15px;
-    color: #fbbf24;
-    text-align: center;
+  #overlay.show{display:flex;}
+  #overlay h2{margin:0;font-size:32px;}
+  #overlay h2.win{color:#4ade80;}
+  #overlay h2.lose{color:var(--warn);}
+  #overlay p{margin:0;font-size:16px;color:var(--text);}
+  #restart{
+    padding:10px 22px;font-size:15px;background:var(--accent);color:#0f1117;
+    border:none;border-radius:6px;cursor:pointer;font-weight:bold;
   }
-  #restart {
-    padding: 8px 18px;
-    font-size: 15px;
-    background: var(--accent);
-    color: #0f1117;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    font-weight: bold;
-    display: none;
-  }
-  #restart:hover { opacity: 0.9; }
-  #hint {
-    font-size: 13px;
-    color: #9ca3af;
-  }
+  #restart:hover{opacity:0.9;}
 </style>
 </head>
 <body>
-  <h1>🐍 스네이크 게임</h1>
-  <div id="info">
-    <div>점수: <span id="score">0</span></div>
-    <div>최고 점수: <span id="best">0</span></div>
+<div id="app">
+  <canvas id="game" width="800" height="450"></canvas>
+  <div id="hud">
+    <div class="item"><span class="label">점수</span><span class="value" id="score">0</span></div>
+    <div class="item"><span class="label">코인</span><span class="value" id="coins">0</span></div>
+    <div class="item"><span class="label">목숨</span><span class="value" id="lives">3</span></div>
   </div>
-  <canvas id="board" width="400" height="400"></canvas>
-  <div id="message"></div>
-  <button id="restart">다시 시작</button>
-  <div id="hint">방향키 또는 WASD로 이동 · 스페이스바로 일시정지</div>
+  <div id="hint">←→/AD: 이동 · 스페이스/↑/W: 점프 · 적을 밟으면 처치, 옆에서 닿으면 목숨 감소</div>
+  <div id="overlay">
+    <h2 id="overlay-title">게임 오버</h2>
+    <p id="overlay-text"></p>
+    <button id="restart">다시 시작</button>
+  </div>
+</div>
 
 <script>
-const canvas = document.getElementById('board');
-const ctx = canvas.getContext('2d');
-const scoreEl = document.getElementById('score');
-const bestEl = document.getElementById('best');
-const messageEl = document.getElementById('message');
-const restartBtn = document.getElementById('restart');
+(function(){
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const GROUND_TOP = H - 60;
 
-const GRID = 20;
-const CELLS = canvas.width / GRID;
+  const scoreEl = document.getElementById('score');
+  const coinsEl = document.getElementById('coins');
+  const livesEl = document.getElementById('lives');
+  const overlay = document.getElementById('overlay');
+  const overlayTitle = document.getElementById('overlay-title');
+  const overlayText = document.getElementById('overlay-text');
+  const restartBtn = document.getElementById('restart');
 
-let snake, direction, nextDirection, food, score, best, gameOver, paused, loopId;
+  const GRAVITY = 0.6;
+  const MAX_FALL = 15;
+  const MOVE_SPEED = 4.2;
+  const JUMP_VELOCITY = -12.5;
+  const JUMP_CUT = -4;
 
-function loadBest() {
-  try {
-    return parseInt(localStorage.getItem('snakeBest') || '0', 10);
-  } catch (e) {
-    return 0;
+  const LEVEL_WIDTH = 4600;
+
+  function rect(x,y,w,h){ return {x,y,w,h}; }
+
+  // ground segments (with pit gaps) + floating platforms + pipes all act as solids
+  const GROUND = [
+    [0,620],
+    [700,1340],
+    [1420,2000],
+    [2080,2760],
+    [2840,3480],
+    [3560,4600],
+  ].map(([x1,x2])=>rect(x1, GROUND_TOP, x2-x1, 60+200));
+
+  const PLATFORMS = [
+    rect(780,300,120,22),
+    rect(980,230,100,22),
+    rect(1520,320,110,22),
+    rect(1720,250,100,22),
+    rect(2140,280,130,22),
+    rect(2420,210,100,22),
+    rect(2920,300,120,22),
+    rect(3620,260,110,22),
+    rect(3860,190,100,22),
+  ];
+
+  const PIPES = [
+    rect(1620,GROUND_TOP-60,60,60),
+    rect(2650,GROUND_TOP-90,60,90),
+    rect(3300,GROUND_TOP-50,60,50),
+  ];
+
+  const SOLIDS = [...GROUND, ...PLATFORMS, ...PIPES];
+
+  const coins = [
+    [800,250],[830,250],[860,250],
+    [1000,180],[1030,180],
+    [1540,270],[1560,270],
+    [1740,200],
+    [2160,230],[2190,230],[2220,230],
+    [2440,160],
+    [2940,250],[2970,250],
+    [3640,210],[3670,210],
+    [3880,140],
+    [2900,GROUND_TOP-40],[2700,GROUND_TOP-40],
+  ].map(([x,y])=>({x,y,r:10,taken:false}));
+
+  function makeEnemy(x, minX, maxX){
+    return { x, y:GROUND_TOP-30, w:30, h:30, vx:-1.2, alive:true, minX, maxX };
   }
-}
-function saveBest(value) {
-  try {
-    localStorage.setItem('snakeBest', String(value));
-  } catch (e) {}
-}
+  const enemies = [
+    makeEnemy(900, 820, 1150),
+    makeEnemy(1480, 1430, 1650),
+    makeEnemy(1850, 1740, 1960),
+    makeEnemy(2200, 2100, 2500),
+    makeEnemy(2500, 2450, 2730),
+    makeEnemy(3000, 2880, 3150),
+    makeEnemy(3700, 3600, 3900),
+    makeEnemy(4100, 4000, 4350),
+  ];
 
-function randomFood() {
-  while (true) {
-    const pos = {
-      x: Math.floor(Math.random() * CELLS),
-      y: Math.floor(Math.random() * CELLS),
+  const flag = { x: LEVEL_WIDTH-150, y: 150, h: GROUND_TOP-150 };
+
+  function createPlayer(){
+    return {
+      x:50, y:GROUND_TOP-50, w:28, h:42,
+      vx:0, vy:0, onGround:false, facing:1,
+      invuln:0,
     };
-    if (!snake.some(s => s.x === pos.x && s.y === pos.y)) return pos;
-  }
-}
-
-function init() {
-  snake = [{ x: 9, y: 10 }, { x: 8, y: 10 }, { x: 7, y: 10 }];
-  direction = { x: 1, y: 0 };
-  nextDirection = { x: 1, y: 0 };
-  score = 0;
-  paused = false;
-  gameOver = false;
-  best = loadBest();
-  food = randomFood();
-  scoreEl.textContent = score;
-  bestEl.textContent = best;
-  messageEl.textContent = '';
-  restartBtn.style.display = 'none';
-  if (loopId) clearInterval(loopId);
-  loopId = setInterval(tick, 110);
-  draw();
-}
-
-function tick() {
-  if (paused || gameOver) return;
-  direction = nextDirection;
-  const head = { x: snake[0].x + direction.x, y: snake[0].y + direction.y };
-
-  if (head.x < 0 || head.x >= CELLS || head.y < 0 || head.y >= CELLS ||
-      snake.some(s => s.x === head.x && s.y === head.y)) {
-    endGame();
-    return;
   }
 
-  snake.unshift(head);
+  let player, score, coinCount, lives, camX, state, keys;
 
-  if (head.x === food.x && head.y === food.y) {
-    score++;
+  function resetGame(){
+    player = createPlayer();
+    score = 0; coinCount = 0; lives = 3;
+    camX = 0; state = 'playing';
+    coins.forEach(c=>c.taken=false);
+    enemies.forEach(e=>{ e.alive=true; });
+    enemies[0].x=900; enemies[1].x=1480; enemies[2].x=1850; enemies[3].x=2200;
+    enemies[4].x=2500; enemies[5].x=3000; enemies[6].x=3700; enemies[7].x=4100;
+    overlay.classList.remove('show');
+    updateHud();
+  }
+
+  function updateHud(){
     scoreEl.textContent = score;
-    food = randomFood();
-  } else {
-    snake.pop();
+    coinsEl.textContent = coinCount;
+    livesEl.textContent = lives;
   }
 
-  draw();
-}
-
-function endGame() {
-  gameOver = true;
-  clearInterval(loopId);
-  if (score > best) {
-    best = score;
-    saveBest(best);
-    bestEl.textContent = best;
-    messageEl.textContent = `게임 오버! 새 최고 기록: ${score}`;
-  } else {
-    messageEl.textContent = `게임 오버! 점수: ${score}`;
+  function rectsOverlap(a,b){
+    return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
   }
-  restartBtn.style.display = 'inline-block';
-}
 
-function draw() {
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--board-bg');
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  function respawnPlayer(){
+    player.x = Math.max(50, camX + 20);
+    player.y = GROUND_TOP-50;
+    player.vx = 0; player.vy = 0;
+    player.invuln = 90;
+  }
 
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--food');
-  ctx.beginPath();
-  ctx.arc(food.x * GRID + GRID / 2, food.y * GRID + GRID / 2, GRID / 2 - 3, 0, Math.PI * 2);
-  ctx.fill();
+  function loseLife(){
+    lives--;
+    updateHud();
+    if(lives <= 0){
+      triggerLose();
+    } else {
+      respawnPlayer();
+    }
+  }
 
-  snake.forEach((seg, i) => {
-    ctx.fillStyle = i === 0
-      ? getComputedStyle(document.documentElement).getPropertyValue('--snake-head')
-      : getComputedStyle(document.documentElement).getPropertyValue('--snake');
-    ctx.fillRect(seg.x * GRID + 1, seg.y * GRID + 1, GRID - 2, GRID - 2);
+  function triggerLose(){
+    state = 'lose';
+    overlayTitle.textContent = '게임 오버';
+    overlayTitle.className = 'lose';
+    overlayText.textContent = `점수: ${score} · 코인: ${coinCount}`;
+    overlay.classList.add('show');
+  }
+
+  function triggerWin(){
+    state = 'win';
+    overlayTitle.textContent = '클리어!';
+    overlayTitle.className = 'win';
+    overlayText.textContent = `점수: ${score} · 코인: ${coinCount} · 목숨: ${lives}`;
+    overlay.classList.add('show');
+  }
+
+  keys = {};
+  window.addEventListener('keydown',(e)=>{
+    keys[e.key] = true;
+    if([' ','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) e.preventDefault();
+  });
+  window.addEventListener('keyup',(e)=>{
+    keys[e.key] = false;
+    if((e.key===' '||e.key==='ArrowUp'||e.key==='w'||e.key==='W') && player.vy < JUMP_CUT){
+      player.vy = JUMP_CUT;
+    }
   });
 
-  if (paused && !gameOver) {
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 24px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('일시정지', canvas.width / 2, canvas.height / 2);
+  restartBtn.addEventListener('click', resetGame);
+
+  function isJumpPressed(){
+    return keys[' '] || keys['ArrowUp'] || keys['w'] || keys['W'];
   }
-}
+  function isLeftPressed(){ return keys['ArrowLeft'] || keys['a'] || keys['A']; }
+  function isRightPressed(){ return keys['ArrowRight'] || keys['d'] || keys['D']; }
 
-const keyMap = {
-  ArrowUp: { x: 0, y: -1 }, w: { x: 0, y: -1 }, W: { x: 0, y: -1 },
-  ArrowDown: { x: 0, y: 1 }, s: { x: 0, y: 1 }, S: { x: 0, y: 1 },
-  ArrowLeft: { x: -1, y: 0 }, a: { x: -1, y: 0 }, A: { x: -1, y: 0 },
-  ArrowRight: { x: 1, y: 0 }, d: { x: 1, y: 0 }, D: { x: 1, y: 0 },
-};
+  function update(){
+    if(state !== 'playing') return;
 
-document.addEventListener('keydown', (e) => {
-  if (e.key === ' ') {
-    e.preventDefault();
-    if (!gameOver) {
-      paused = !paused;
-      draw();
+    if(isLeftPressed()){ player.vx = -MOVE_SPEED; player.facing = -1; }
+    else if(isRightPressed()){ player.vx = MOVE_SPEED; player.facing = 1; }
+    else { player.vx = 0; }
+
+    if(isJumpPressed() && player.onGround){
+      player.vy = JUMP_VELOCITY;
+      player.onGround = false;
     }
-    return;
+
+    player.vy = Math.min(player.vy + GRAVITY, MAX_FALL);
+
+    // horizontal move + collide
+    player.x += player.vx;
+    player.x = Math.max(0, Math.min(player.x, LEVEL_WIDTH - player.w));
+    for(const s of SOLIDS){
+      if(rectsOverlap(player, s)){
+        if(player.vx > 0) player.x = s.x - player.w;
+        else if(player.vx < 0) player.x = s.x + s.w;
+      }
+    }
+
+    // vertical move + collide
+    player.y += player.vy;
+    player.onGround = false;
+    for(const s of SOLIDS){
+      if(rectsOverlap(player, s)){
+        if(player.vy > 0){ player.y = s.y - player.h; player.vy = 0; player.onGround = true; }
+        else if(player.vy < 0){ player.y = s.y + s.h; player.vy = 0; }
+      }
+    }
+
+    if(player.invuln > 0) player.invuln--;
+
+    // fell into a pit
+    if(player.y > H + 100){
+      loseLife();
+      return;
+    }
+
+    // coins
+    for(const c of coins){
+      if(c.taken) continue;
+      const dx = (player.x+player.w/2) - c.x;
+      const dy = (player.y+player.h/2) - c.y;
+      if(Math.hypot(dx,dy) < c.r + 16){
+        c.taken = true;
+        coinCount++;
+        score += 10;
+        updateHud();
+      }
+    }
+
+    // enemies
+    for(const en of enemies){
+      if(!en.alive) continue;
+      en.x += en.vx;
+      if(en.x < en.minX || en.x + en.w > en.maxX) en.vx *= -1;
+
+      if(rectsOverlap(player, en)){
+        const playerBottom = player.y + player.h;
+        const stomping = player.vy > 0 && playerBottom - player.vy <= en.y + 10;
+        if(stomping){
+          en.alive = false;
+          player.vy = JUMP_VELOCITY * 0.55;
+          score += 100;
+          updateHud();
+        } else if(player.invuln <= 0){
+          loseLife();
+          return;
+        }
+      }
+    }
+
+    // goal flag
+    if(player.x + player.w >= flag.x){
+      triggerWin();
+      return;
+    }
+
+    // camera
+    camX = Math.max(0, Math.min(player.x - W/2, LEVEL_WIDTH - W));
   }
-  const dir = keyMap[e.key];
-  if (!dir) return;
-  e.preventDefault();
-  // prevent reversing directly into itself
-  if (dir.x === -direction.x && dir.y === -direction.y) return;
-  nextDirection = dir;
-});
 
-restartBtn.addEventListener('click', init);
+  function drawBackground(){
+    ctx.fillStyle = '#5c94fc';
+    ctx.fillRect(0,0,W,H);
 
-init();
+    // clouds (parallax)
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    for(let i=0;i<10;i++){
+      const baseX = i*500 - (camX*0.3)%500;
+      const x = ((baseX % (W+400)) + (W+400)) % (W+400) - 200;
+      const y = 60 + (i%3)*35;
+      drawCloud(x,y);
+    }
+
+    // hills (parallax)
+    ctx.fillStyle = '#3fae3f';
+    for(let i=0;i<8;i++){
+      const baseX = i*420 - (camX*0.5)%420;
+      const x = ((baseX % (W+300)) + (W+300)) % (W+300) - 150;
+      drawHill(x, GROUND_TOP, 110 + (i%2)*30);
+    }
+  }
+
+  function drawCloud(x,y){
+    ctx.beginPath();
+    ctx.ellipse(x,y,28,16,0,0,Math.PI*2);
+    ctx.ellipse(x+22,y-8,22,14,0,0,Math.PI*2);
+    ctx.ellipse(x-22,y-6,20,13,0,0,Math.PI*2);
+    ctx.fill();
+  }
+  function drawHill(x, groundY, size){
+    ctx.beginPath();
+    ctx.moveTo(x-size, groundY);
+    ctx.quadraticCurveTo(x, groundY-size, x+size, groundY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawGround(r){
+    const screenX = r.x - camX;
+    ctx.fillStyle = '#c86428';
+    ctx.fillRect(screenX, r.y, r.w, 60);
+    ctx.fillStyle = '#3fae3f';
+    ctx.fillRect(screenX, r.y, r.w, 14);
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+    ctx.lineWidth = 2;
+    for(let bx = 0; bx < r.w; bx += 30){
+      ctx.strokeRect(screenX+bx, r.y+14, 30, 46);
+    }
+  }
+
+  function drawPlatform(r){
+    const screenX = r.x - camX;
+    ctx.fillStyle = '#b06a3a';
+    ctx.fillRect(screenX, r.y, r.w, r.h);
+    ctx.fillStyle = '#8a4d26';
+    ctx.fillRect(screenX, r.y, r.w, 5);
+  }
+
+  function drawPipe(r){
+    const screenX = r.x - camX;
+    ctx.fillStyle = '#2fa84f';
+    ctx.fillRect(screenX, r.y+14, r.w, r.h-14);
+    ctx.fillStyle = '#1f8f3c';
+    ctx.fillRect(screenX-5, r.y, r.w+10, 18);
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(screenX, r.y+14, r.w, r.h-14);
+  }
+
+  function drawCoin(c){
+    if(c.taken) return;
+    const screenX = c.x - camX;
+    if(screenX < -30 || screenX > W+30) return;
+    ctx.fillStyle = '#ffd94a';
+    ctx.beginPath();
+    ctx.arc(screenX, c.y, c.r, 0, Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle = '#c98a00';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  function drawEnemy(en){
+    if(!en.alive) return;
+    const screenX = en.x - camX;
+    if(screenX < -40 || screenX > W+40) return;
+    ctx.fillStyle = '#8b5a2b';
+    ctx.beginPath();
+    ctx.ellipse(screenX+en.w/2, en.y+en.h*0.6, en.w/2, en.h*0.4, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#5c3a1a';
+    ctx.fillRect(screenX, en.y+en.h-8, en.w, 8);
+    // eyes
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(screenX+en.w*0.35, en.y+en.h*0.45, 4, 0, Math.PI*2);
+    ctx.arc(screenX+en.w*0.65, en.y+en.h*0.45, 4, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(screenX+en.w*0.35, en.y+en.h*0.45, 2, 0, Math.PI*2);
+    ctx.arc(screenX+en.w*0.65, en.y+en.h*0.45, 2, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  function drawFlag(){
+    const screenX = flag.x - camX;
+    ctx.fillStyle = '#d1d5db';
+    ctx.fillRect(screenX, flag.y, 6, flag.h);
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.moveTo(screenX+6, flag.y+6);
+    ctx.lineTo(screenX+46, flag.y+18);
+    ctx.lineTo(screenX+6, flag.y+30);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawPlayer(){
+    if(player.invuln > 0 && Math.floor(player.invuln/5)%2===0) return;
+    const screenX = player.x - camX;
+    ctx.save();
+    ctx.translate(screenX + player.w/2, 0);
+    ctx.scale(player.facing, 1);
+    ctx.translate(-player.w/2, 0);
+
+    // body (overalls)
+    ctx.fillStyle = '#3b6ef0';
+    ctx.fillRect(0, player.y+18, player.w, player.h-18);
+    // shirt
+    ctx.fillStyle = '#e63946';
+    ctx.fillRect(0, player.y+10, player.w, 10);
+    // head
+    ctx.fillStyle = '#f4c89a';
+    ctx.fillRect(4, player.y, player.w-8, 14);
+    // cap
+    ctx.fillStyle = '#e63946';
+    ctx.fillRect(2, player.y-4, player.w-4, 8);
+    ctx.fillRect(player.w-10, player.y-2, 10, 5);
+
+    ctx.restore();
+  }
+
+  function render(){
+    drawBackground();
+    for(const r of GROUND) drawGround(r);
+    for(const r of PLATFORMS) drawPlatform(r);
+    for(const r of PIPES) drawPipe(r);
+    for(const c of coins) drawCoin(c);
+    for(const en of enemies) drawEnemy(en);
+    drawFlag();
+    drawPlayer();
+  }
+
+  function loop(){
+    update();
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  resetGame();
+  loop();
+})();
 </script>
 </body>
 </html>

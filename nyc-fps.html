@@ -109,6 +109,14 @@
     border:none; border-radius:8px; cursor:pointer; font-weight:bold;
   }
   #overlay button:hover{ opacity:0.9; }
+  #overlay-buttons{ display:flex; gap:10px; }
+  #quit-btn{
+    padding:12px 22px; font-size:15px; background:transparent; color:#cbd5e1;
+    border:1px solid #3d4254; border-radius:8px; cursor:pointer; font-weight:bold;
+    display:none;
+  }
+  #quit-btn:hover{ background:rgba(255,255,255,0.08); }
+  #quit-btn.show{ display:inline-block; }
   .key{ background:#2d3140; border-radius:4px; padding:2px 8px; font-weight:bold; }
 </style>
 </head>
@@ -152,10 +160,14 @@
     <p>
       어두워진 뉴욕 거리에서 침투한 적들을 소탕하세요. 4개의 웨이브를 모두 클리어하면 작전 성공입니다.<br><br>
       <span class="key">WASD</span> 이동 · <span class="key">Shift</span> 달리기 · <span class="key">Space</span> 점프<br>
-      <span class="key">마우스</span> 시점 조작 · <span class="key">좌클릭</span> 발사 · <span class="key">R</span> 재장전<br><br>
+      <span class="key">마우스</span> 시점 조작 · <span class="key">좌클릭</span> 발사(누르고 있으면 연사) · <span class="key">R</span> 재장전<br>
+      <span class="key">Esc</span> 일시정지 (일시정지 화면의 나가기 버튼으로 종료)<br><br>
       클릭하면 마우스가 화면에 고정되어 조준할 수 있습니다 (Esc로 해제).
     </p>
-    <button id="start-btn">클릭해서 작전 시작</button>
+    <div id="overlay-buttons">
+      <button id="start-btn">클릭해서 작전 시작</button>
+      <button id="quit-btn">나가기</button>
+    </div>
   </div>
 </div>
 
@@ -179,6 +191,9 @@
   const killFeed = document.getElementById('kill-feed');
   const overlay = document.getElementById('overlay');
   const startBtn = document.getElementById('start-btn');
+  const quitBtn = document.getElementById('quit-btn');
+  const INTRO_TITLE = overlay.querySelector('h1').textContent;
+  const INTRO_TEXT = overlay.querySelector('p').innerHTML;
 
   // ---------- constants ----------
   const MAP_HALF = 100;
@@ -206,6 +221,53 @@
 
   function rand(a, b){ return a + Math.random() * (b - a); }
   function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+
+  // ---------- audio (procedural, no external files) ----------
+  let audioCtx = null;
+  function ensureAudio(){
+    if(!audioCtx){
+      try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch(err){ return null; }
+    }
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+  function playGunshot(){
+    const ctx = ensureAudio();
+    if(!ctx) return;
+    const now = ctx.currentTime;
+
+    const noiseDur = 0.14;
+    const bufferSize = Math.floor(ctx.sampleRate * noiseDur);
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for(let i=0;i<bufferSize;i++){
+      data[i] = (Math.random()*2-1) * Math.pow(1 - i/bufferSize, 2.2);
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+    const noiseFilter = ctx.createBiquadFilter();
+    noiseFilter.type = 'bandpass';
+    noiseFilter.frequency.value = 1600;
+    noiseFilter.Q.value = 0.7;
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.9, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + noiseDur);
+    noise.connect(noiseFilter).connect(noiseGain).connect(ctx.destination);
+    noise.start(now);
+    noise.stop(now + noiseDur);
+
+    const thump = ctx.createOscillator();
+    thump.type = 'triangle';
+    thump.frequency.setValueAtTime(140, now);
+    thump.frequency.exponentialRampToValueAtTime(45, now + 0.09);
+    const thumpGain = ctx.createGain();
+    thumpGain.gain.setValueAtTime(0.8, now);
+    thumpGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+    thump.connect(thumpGain).connect(ctx.destination);
+    thump.start(now);
+    thump.stop(now + 0.11);
+  }
 
   // ---------- three.js setup ----------
   const scene = new THREE.Scene();
@@ -514,6 +576,9 @@
   let waveIndex = 0;
   let state = 'start'; // start | playing | paused | win | lose
   let waveClearTimer = 0;
+  let firing = false;
+  let fireCooldown = 0;
+  const FIRE_INTERVAL = 9; // frames between shots while mouse is held down
 
   const keys = {};
   window.addEventListener('keydown', (e)=>{
@@ -533,18 +598,32 @@
   document.addEventListener('pointerlockchange', ()=>{
     if(document.pointerLockElement !== canvas && state === 'playing'){
       state = 'paused';
-      showOverlay('일시정지', '클릭해서 다시 조준하세요.', false);
+      firing = false;
+      quitBtn.classList.add('show');
+      showOverlay('일시정지', '클릭해서 다시 조준하세요.<br>완전히 종료하려면 아래 나가기 버튼을 누르세요.', false);
     }
   });
 
   function startGame(){
     state = 'playing';
     overlay.classList.add('hidden');
+    quitBtn.classList.remove('show');
+    ensureAudio();
     try{ canvas.requestPointerLock(); }catch(err){}
   }
   startBtn.addEventListener('click', ()=>{
     if(state === 'win' || state === 'lose') resetGame();
     startGame();
+  });
+  quitBtn.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    firing = false;
+    state = 'start';
+    document.exitPointerLock();
+    resetGame();
+    quitBtn.classList.remove('show');
+    showOverlay(INTRO_TITLE, INTRO_TEXT, false);
+    startBtn.textContent = '클릭해서 작전 시작';
   });
 
   canvas.addEventListener('mousedown', (e)=>{
@@ -554,9 +633,15 @@
       return;
     }
     if(state === 'playing'){
+      firing = true;
       shoot();
+      fireCooldown = FIRE_INTERVAL;
     }
   });
+  window.addEventListener('mouseup', (e)=>{
+    if(e.button === 0) firing = false;
+  });
+  window.addEventListener('blur', ()=>{ firing = false; });
 
   function showOverlay(title, text, isEnd, cls){
     overlay.classList.remove('hidden');
@@ -572,6 +657,7 @@
     player.health = 100; player.ammo = MAG_SIZE; player.reserve = 72;
     player.score = 0; player.kills = 0; player.reloading=false; player.reloadTimer=0;
     player.alive = true;
+    firing = false; fireCooldown = 0;
     for(const en of enemies.slice()) removeEnemy(en);
     enemies.length = 0;
     waveIndex = 0;
@@ -594,6 +680,7 @@
     if(player.ammo <= 0){ tryReload(); return; }
     player.ammo--;
     updateHud();
+    playGunshot();
 
     muzzleFlash.visible = true;
     muzzleTimer = 4;
@@ -659,12 +746,16 @@
 
   function triggerWin(){
     state = 'win';
+    firing = false;
+    quitBtn.classList.remove('show');
     document.exitPointerLock();
     showOverlay('작전 성공!', `모든 웨이브를 돌파했습니다.<br>점수 ${player.score} · 처치 ${player.kills}`, true, 'win');
   }
   function triggerLose(){
     state = 'lose';
     player.alive = false;
+    firing = false;
+    quitBtn.classList.remove('show');
     document.exitPointerLock();
     showOverlay('작전 실패', `점수 ${player.score} · 처치 ${player.kills}`, true, 'lose');
   }
@@ -766,6 +857,11 @@
     camera.position.set(player.x, EYE_HEIGHT+player.yOffset, player.z);
     camera.rotation.y = player.yaw;
     camera.rotation.x = player.pitch;
+
+    if(firing){
+      if(fireCooldown > 0) fireCooldown--;
+      else { shoot(); fireCooldown = FIRE_INTERVAL; }
+    }
 
     if(player.reloading){
       player.reloadTimer--;

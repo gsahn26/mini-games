@@ -42,7 +42,10 @@
     padding:6px 4px; cursor:pointer; user-select:none;
   }
   .slot.active{ border-color:var(--accent); box-shadow:0 0 8px rgba(250,204,21,0.5); }
-  .slot .swatch{ width:28px; height:28px; border-radius:4px; border:1px solid rgba(0,0,0,0.4); }
+  .slot .swatch{
+    width:28px; height:28px; border-radius:4px; border:1px solid rgba(0,0,0,0.4);
+    background-size:cover; image-rendering:pixelated;
+  }
   .slot .label{ font-size:10px; color:#cbd5e1; text-align:center; white-space:nowrap; }
 
   #overlay{
@@ -51,7 +54,11 @@
     background:rgba(8,10,16,0.85); padding:20px;
   }
   #overlay.hidden{ display:none; }
-  #overlay h1{ margin:0; font-size:34px; }
+  #overlay h1{
+    margin:0; font-size:40px; letter-spacing:2px; font-weight:800;
+    text-shadow:0 3px 0 rgba(0,0,0,0.35), 0 0 24px rgba(250,204,21,0.25);
+  }
+  #overlay .subtitle{ margin:-10px 0 4px; font-size:13px; letter-spacing:3px; color:var(--accent); font-weight:bold; }
   #overlay p{ margin:0; font-size:15px; color:#cbd5e1; max-width:520px; line-height:1.6; }
   #overlay-buttons{ display:flex; gap:10px; }
   #overlay button{
@@ -59,13 +66,14 @@
     border:none; border-radius:8px; cursor:pointer; font-weight:bold;
   }
   #overlay button:hover{ opacity:0.9; }
-  #quit-btn{
+  #quit-btn, #reset-btn{
     padding:12px 22px; font-size:15px; background:transparent; color:#cbd5e1;
     border:1px solid #3d4254; border-radius:8px; cursor:pointer; font-weight:bold;
     display:none;
   }
-  #quit-btn:hover{ background:rgba(255,255,255,0.08); }
-  #quit-btn.show{ display:inline-block; }
+  #quit-btn:hover, #reset-btn:hover{ background:rgba(255,255,255,0.08); }
+  #quit-btn.show, #reset-btn.show{ display:inline-block; }
+  #reset-btn{ color:#fca5a5; border-color:#5c3030; }
   .key{ background:#2d3140; border-radius:4px; padding:2px 8px; font-weight:bold; }
 </style>
 </head>
@@ -76,13 +84,15 @@
   <div id="crosshair"></div>
 
   <div id="coord-panel">
-    좌표 <b id="coord-xyz">0, 0, 0</b><br>
-    선택한 블록 <b id="coord-block">잔디</b>
+    FPS <b id="coord-fps">0</b> · 좌표 <b id="coord-xyz">0, 0, 0</b><br>
+    선택한 블록 <b id="coord-block">잔디</b><br>
+    조준 <b id="coord-target">-</b>
   </div>
 
   <div id="hotbar"></div>
 
   <div id="overlay">
+    <div class="subtitle">VOXEL SANDBOX</div>
     <h1>복셀 크래프트</h1>
     <p>
       초록빛 섬에서 자유롭게 블록을 캐고 쌓아보세요. 기본은 3인칭 시점입니다.<br><br>
@@ -95,6 +105,7 @@
     <div id="overlay-buttons">
       <button id="start-btn">클릭해서 시작</button>
       <button id="quit-btn">나가기</button>
+      <button id="reset-btn">월드 초기화</button>
     </div>
   </div>
 </div>
@@ -105,9 +116,12 @@
   const overlay = document.getElementById('overlay');
   const startBtn = document.getElementById('start-btn');
   const quitBtn = document.getElementById('quit-btn');
+  const resetBtn = document.getElementById('reset-btn');
   const hotbarEl = document.getElementById('hotbar');
   const coordXyzEl = document.getElementById('coord-xyz');
   const coordBlockEl = document.getElementById('coord-block');
+  const coordFpsEl = document.getElementById('coord-fps');
+  const coordTargetEl = document.getElementById('coord-target');
   const INTRO_TITLE = overlay.querySelector('h1').textContent;
   const INTRO_TEXT = overlay.querySelector('p').innerHTML;
 
@@ -225,37 +239,158 @@
   let walkPhase = 0;
   let viewMode = 'third'; // 'third' | 'first'
 
-  // ---------- block types ----------
-  const BLOCK_DEFS = {
-    grass:  { top:0x6abe4a, side:0x8a6b45, bottom:0x6b4a2f, label:'잔디' },
-    dirt:   { color:0x8a6b45, label:'흙' },
-    stone:  { color:0x8d9096, label:'돌' },
-    sand:   { color:0xe3d59e, label:'모래' },
-    wood:   { color:0x6b4a2f, label:'원목' },
-    plank:  { color:0xb98a55, label:'판자' },
-    leaves: { color:0x3f8f3f, opacity:0.92, label:'나뭇잎' },
-  };
-  const HOTBAR_ORDER = ['grass','dirt','stone','sand','wood','plank','leaves'];
-
-  function hex(n){ return '#' + n.toString(16).padStart(6,'0'); }
-  function buildMaterial(def){
-    if(def.top !== undefined){
-      const topM = new THREE.MeshStandardMaterial({ color:def.top, roughness:0.9 });
-      const sideM = new THREE.MeshStandardMaterial({ color:def.side, roughness:0.9 });
-      const botM = new THREE.MeshStandardMaterial({ color:def.bottom, roughness:0.9 });
-      return [sideM, sideM, topM, botM, sideM, sideM];
+  // ---------- procedural textures (noisy pixel look, no external image files) ----------
+  const TEX_SIZE = 16;
+  function clampByte(v){ return Math.max(0, Math.min(255, Math.round(v))); }
+  function rgb(col){ return 'rgb(' + clampByte(col[0]) + ',' + clampByte(col[1]) + ',' + clampByte(col[2]) + ')'; }
+  function makeCanvas(size){ const c = document.createElement('canvas'); c.width = size; c.height = size; return c; }
+  function toTexture(c){
+    const t = new THREE.CanvasTexture(c);
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestFilter;
+    t.needsUpdate = true;
+    return t;
+  }
+  function noiseCanvas(size, base, variance){
+    const c = makeCanvas(size), g = c.getContext('2d');
+    for(let y=0; y<size; y++){
+      for(let x=0; x<size; x++){
+        const n = (Math.random()-0.5) * variance;
+        g.fillStyle = rgb([base[0]+n, base[1]+n, base[2]+n]);
+        g.fillRect(x, y, 1, 1);
+      }
     }
-    const opts = { color:def.color, roughness:0.9 };
-    if(def.opacity !== undefined){ opts.transparent = true; opts.opacity = def.opacity; }
+    return c;
+  }
+  function grassSideCanvas(size){
+    const c = makeCanvas(size), g = c.getContext('2d');
+    const dirt = [134,96,67], grassC = [91,168,74];
+    const edge = size * 0.3;
+    for(let y=0; y<size; y++){
+      for(let x=0; x<size; x++){
+        const n = (Math.random()-0.5) * 24;
+        let base;
+        if(y < edge-1) base = grassC;
+        else if(y < edge+1) base = (Math.random() < 0.5) ? grassC : dirt;
+        else base = dirt;
+        g.fillStyle = rgb([base[0]+n, base[1]+n, base[2]+n]);
+        g.fillRect(x, y, 1, 1);
+      }
+    }
+    return c;
+  }
+  function woodSideCanvas(size){
+    const c = makeCanvas(size), g = c.getContext('2d');
+    const barkA = [92,64,40], barkB = [114,82,54];
+    for(let x=0; x<size; x++){
+      const base = (Math.floor(x/2)%2===0) ? barkA : barkB;
+      for(let y=0; y<size; y++){
+        const n = (Math.random()-0.5) * 14;
+        g.fillStyle = rgb([base[0]+n, base[1]+n, base[2]+n]);
+        g.fillRect(x, y, 1, 1);
+      }
+    }
+    return c;
+  }
+  function woodTopCanvas(size){
+    const c = makeCanvas(size), g = c.getContext('2d');
+    const base = [152,112,72], dark = [110,78,48];
+    const cx = size/2, cy = size/2;
+    for(let y=0; y<size; y++){
+      for(let x=0; x<size; x++){
+        const d = Math.hypot(x-cx+0.5, y-cy+0.5);
+        const ring = Math.floor(d/1.6) % 2 === 0;
+        const n = (Math.random()-0.5) * 10;
+        const col = ring ? base : dark;
+        g.fillStyle = rgb([col[0]+n, col[1]+n, col[2]+n]);
+        g.fillRect(x, y, 1, 1);
+      }
+    }
+    return c;
+  }
+  function plankCanvas(size){
+    const c = makeCanvas(size), g = c.getContext('2d');
+    const a = [181,139,90], b = [164,123,77];
+    for(let y=0; y<size; y++){
+      const base = (Math.floor(y/4)%2===0) ? a : b;
+      for(let x=0; x<size; x++){
+        const n = (Math.random()-0.5) * 12;
+        g.fillStyle = rgb([base[0]+n, base[1]+n, base[2]+n]);
+        g.fillRect(x, y, 1, 1);
+      }
+    }
+    return c;
+  }
+  function leavesCanvas(size){
+    const c = makeCanvas(size), g = c.getContext('2d');
+    const base = [63,143,58];
+    for(let y=0; y<size; y++){
+      for(let x=0; x<size; x++){
+        const dark = Math.random() < 0.22;
+        const n = (Math.random()-0.5) * 20;
+        const col = dark ? [base[0]*0.55, base[1]*0.55, base[2]*0.55] : base;
+        g.fillStyle = rgb([col[0]+n, col[1]+n, col[2]+n]);
+        g.fillRect(x, y, 1, 1);
+      }
+    }
+    return c;
+  }
+
+  const CANVAS = {
+    grassTop: noiseCanvas(TEX_SIZE, [95,168,74], 28),
+    grassSide: grassSideCanvas(TEX_SIZE),
+    dirt: noiseCanvas(TEX_SIZE, [134,96,67], 22),
+    stone: noiseCanvas(TEX_SIZE, [140,140,145], 34),
+    sand: noiseCanvas(TEX_SIZE, [221,201,152], 16),
+    woodSide: woodSideCanvas(TEX_SIZE),
+    woodTop: woodTopCanvas(TEX_SIZE),
+    plank: plankCanvas(TEX_SIZE),
+    leaves: leavesCanvas(TEX_SIZE),
+  };
+  const TEX = {};
+  Object.keys(CANVAS).forEach(k => TEX[k] = toTexture(CANVAS[k]));
+
+  // ---------- block types ----------
+  const SHADE = { top:1.0, bottom:0.55, x:0.82, z:0.68 };
+  function shadedMat(tex, shade, opacity){
+    const opts = { map:tex, color:new THREE.Color(shade, shade, shade), roughness:0.95 };
+    if(opacity !== undefined){ opts.transparent = true; opts.opacity = opacity; }
     return new THREE.MeshStandardMaterial(opts);
   }
+  function sixFaceMaterial(topTex, bottomTex, sideTex, opacity){
+    return [
+      shadedMat(sideTex, SHADE.x, opacity),
+      shadedMat(sideTex, SHADE.x, opacity),
+      shadedMat(topTex, SHADE.top, opacity),
+      shadedMat(bottomTex, SHADE.bottom, opacity),
+      shadedMat(sideTex, SHADE.z, opacity),
+      shadedMat(sideTex, SHADE.z, opacity),
+    ];
+  }
+  const BLOCK_DEFS = {
+    grass:  { label:'잔디', icon:CANVAS.grassTop,
+              material:()=> sixFaceMaterial(TEX.grassTop, TEX.dirt, TEX.grassSide) },
+    dirt:   { label:'흙', icon:CANVAS.dirt,
+              material:()=> sixFaceMaterial(TEX.dirt, TEX.dirt, TEX.dirt) },
+    stone:  { label:'돌', icon:CANVAS.stone,
+              material:()=> sixFaceMaterial(TEX.stone, TEX.stone, TEX.stone) },
+    sand:   { label:'모래', icon:CANVAS.sand,
+              material:()=> sixFaceMaterial(TEX.sand, TEX.sand, TEX.sand) },
+    wood:   { label:'원목', icon:CANVAS.woodTop,
+              material:()=> sixFaceMaterial(TEX.woodTop, TEX.woodTop, TEX.woodSide) },
+    plank:  { label:'판자', icon:CANVAS.plank,
+              material:()=> sixFaceMaterial(TEX.plank, TEX.plank, TEX.plank) },
+    leaves: { label:'나뭇잎', icon:CANVAS.leaves,
+              material:()=> sixFaceMaterial(TEX.leaves, TEX.leaves, TEX.leaves, 0.95) },
+  };
+  const HOTBAR_ORDER = ['grass','dirt','stone','sand','wood','plank','leaves'];
 
   const cubeGeo = new THREE.BoxGeometry(1, 1, 1);
   const typeMeshes = {};
   const typePositions = {};
   const meshToType = new Map();
   Object.keys(BLOCK_DEFS).forEach(name=>{
-    const mesh = new THREE.InstancedMesh(cubeGeo, buildMaterial(BLOCK_DEFS[name]), CAP);
+    const mesh = new THREE.InstancedMesh(cubeGeo, BLOCK_DEFS[name].material(), CAP);
     mesh.count = 0;
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene.add(mesh);
@@ -267,6 +402,42 @@
   // ---------- block storage ----------
   const blocks = new Map(); // "x,y,z" -> {type, idx}
   const tmpMatrix = new THREE.Matrix4();
+
+  // ---------- persistence (localStorage diff vs. the generated base world) ----------
+  const SAVE_KEY = 'voxelCraft.save.v1';
+  let baseKeys = null; // Set, filled right after the base world finishes generating
+  const editAdded = new Map(); // key -> type, for player-placed blocks not in the base world
+  const editRemoved = new Set(); // keys that existed in the base world but were broken
+  let saveTimer = null;
+  function scheduleSave(){
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(doSave, 1000);
+  }
+  function doSave(){
+    try{
+      const data = { added:[...editAdded.entries()], removed:[...editRemoved] };
+      localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    }catch(err){}
+  }
+  function loadSave(){
+    try{
+      const raw = localStorage.getItem(SAVE_KEY);
+      if(!raw) return;
+      const data = JSON.parse(raw);
+      (data.removed||[]).forEach(key=>{
+        const [x,y,z] = key.split(',').map(Number);
+        removeBlock(x,y,z);
+      });
+      (data.added||[]).forEach(([key,type])=>{
+        const [x,y,z] = key.split(',').map(Number);
+        addBlock(x,y,z,type);
+      });
+    }catch(err){}
+  }
+  function resetSave(){
+    try{ localStorage.removeItem(SAVE_KEY); }catch(err){}
+    location.reload();
+  }
 
   function addBlock(x, y, z, type){
     const key = bkey(x,y,z);
@@ -280,6 +451,10 @@
     mesh.instanceMatrix.needsUpdate = true;
     typePositions[type][idx] = { x, y, z };
     blocks.set(key, { type, idx });
+    if(baseKeys){
+      if(baseKeys.has(key)) editRemoved.delete(key);
+      else editAdded.set(key, type);
+    }
     return true;
   }
 
@@ -302,6 +477,10 @@
     mesh.count = lastIdx;
     mesh.instanceMatrix.needsUpdate = true;
     blocks.delete(key);
+    if(baseKeys){
+      if(baseKeys.has(key)) editRemoved.add(key);
+      else editAdded.delete(key);
+    }
     return true;
   }
 
@@ -347,6 +526,8 @@
     }
   }
   generateWorld();
+  baseKeys = new Set(blocks.keys());
+  loadSave();
 
   // ---------- player state ----------
   const spawnY = heightAt(0,0) + 1;
@@ -369,7 +550,7 @@
     slot.className = 'slot';
     const swatch = document.createElement('div');
     swatch.className = 'swatch';
-    swatch.style.background = hex(def.top !== undefined ? def.top : def.color);
+    swatch.style.backgroundImage = 'url(' + def.icon.toDataURL() + ')';
     slot.appendChild(swatch);
     const label = document.createElement('div');
     label.className = 'label';
@@ -406,6 +587,7 @@
       state = 'paused';
       breaking = false; placing = false;
       quitBtn.classList.add('show');
+      resetBtn.classList.add('show');
       showOverlay('일시정지', '클릭해서 다시 조준하세요.<br>완전히 종료하려면 아래 나가기 버튼을 누르세요.');
     }
   });
@@ -420,6 +602,7 @@
     state = 'playing';
     overlay.classList.add('hidden');
     quitBtn.classList.remove('show');
+    resetBtn.classList.remove('show');
     ensureAudio();
     try{ canvas.requestPointerLock(); }catch(err){}
   }
@@ -430,8 +613,13 @@
     state = 'start';
     document.exitPointerLock();
     quitBtn.classList.remove('show');
+    resetBtn.classList.remove('show');
     showOverlay(INTRO_TITLE, INTRO_TEXT);
     startBtn.textContent = '클릭해서 시작';
+  });
+  resetBtn.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    if(confirm('내가 지은 블록을 모두 지우고 섬을 처음 상태로 되돌릴까요?')) resetSave();
   });
 
   canvas.addEventListener('mousedown', (e)=>{
@@ -490,8 +678,10 @@
 
   function breakBlock(){
     if(!targetHit) return;
-    removeBlock(targetHit.pos.x, targetHit.pos.y, targetHit.pos.z);
-    playThud(240, 0.09, 0.55);
+    if(removeBlock(targetHit.pos.x, targetHit.pos.y, targetHit.pos.z)){
+      playThud(240, 0.09, 0.55);
+      scheduleSave();
+    }
   }
   function placeBlock(){
     if(!targetHit) return;
@@ -500,7 +690,10 @@
     const ny = targetHit.pos.y + Math.round(n.y);
     const nz = targetHit.pos.z + Math.round(n.z);
     if(blockOverlapsPlayer(nx, ny, nz)) return;
-    if(addBlock(nx, ny, nz, HOTBAR_ORDER[selectedIndex])) playThud(420, 0.06, 0.4);
+    if(addBlock(nx, ny, nz, HOTBAR_ORDER[selectedIndex])){
+      playThud(420, 0.06, 0.4);
+      scheduleSave();
+    }
   }
 
   // ---------- collision & movement ----------
@@ -643,10 +836,29 @@
     }
 
     coordXyzEl.textContent = Math.round(player.x) + ', ' + Math.round(player.y) + ', ' + Math.round(player.z);
+    if(targetHit){
+      coordTargetEl.textContent = BLOCK_DEFS[targetHit.type].label +
+        ' (' + targetHit.pos.x + ', ' + targetHit.pos.y + ', ' + targetHit.pos.z + ')';
+    } else {
+      coordTargetEl.textContent = '-';
+    }
   }
 
   function render(){
     renderer.render(scene, camera);
+  }
+
+  let fpsFrames = 0, fpsTimer = 0, fpsLast = performance.now();
+  function updateFps(){
+    const now = performance.now();
+    fpsFrames++;
+    fpsTimer += now - fpsLast;
+    fpsLast = now;
+    if(fpsTimer >= 500){
+      coordFpsEl.textContent = Math.round(fpsFrames * 1000 / fpsTimer);
+      fpsFrames = 0;
+      fpsTimer = 0;
+    }
   }
 
   function loop(){
@@ -654,6 +866,7 @@
     updateTargetHit();
     updatePlayer();
     render();
+    updateFps();
   }
   loop();
 })();
